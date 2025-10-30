@@ -10,8 +10,25 @@ import torch
 from omegaconf import OmegaConf
 import urllib.request
 import sounddevice as sd
-import speech_recognition as sr
 import pyttsx3
+
+# AssemblyAI imports
+import assemblyai as aai
+from assemblyai.streaming.v3 import (
+    BeginEvent,
+    StreamingClient,
+    StreamingClientOptions,
+    StreamingError,
+    StreamingEvents,
+    StreamingParameters,
+    StreamingSessionParameters,
+    TerminationEvent,
+    TurnEvent,
+)
+import logging
+from typing import Type
+import threading
+import time
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +42,10 @@ if not GEMINI_API_KEY:
     raise ValueError("Please set GEMINI_API_KEY in your .env file")
 
 genai.configure(api_key=GEMINI_API_KEY)
+
+# Configure AssemblyAI
+ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY', '8be40cb90d054beeb10bd8ca8ce00b0e')
+aai.settings.api_key = ASSEMBLYAI_API_KEY
 
 # Use the available models from your test
 GEMINI_MODELS = [
@@ -87,8 +108,18 @@ model, _ = torch.hub.load(
 )
 model.to(device)
 
-recognizer = sr.Recognizer()
 engine = pyttsx3.init()
+
+# AssemblyAI Streaming Variables
+is_streaming = False
+stream_lock = threading.Lock()
+stop_event = threading.Event()
+client_instance = None
+transcribed_text = ""
+transcription_complete = False
+last_audio_time = 0
+
+# ========== INTERVIEW SESSION CLASS ==========
 
 class InterviewSession:
     def __init__(self, session_id):
@@ -97,8 +128,25 @@ class InterviewSession:
         self.question_count = 0
         self.start_time = datetime.now()
         self.is_completed = False
-        self.candidate_info = {}  # Store candidate information
+        self.candidate_info = {
+            'applied_role': '',
+            'introduction': '',
+            'skills_mentioned': [],
+            'experience_level': '',
+            'communication_score': 0,
+            'technical_score': 0,
+            'key_strengths': [],
+            'areas_for_improvement': []
+        }
         self.all_questions_answers = []  # Store all Q&A for feedback
+        self.topic_coverage = {
+            'algorithms': 0,
+            'data_structures': 0,
+            'system_design': 0,
+            'coding': 0,
+            'problem_solving': 0,
+            'technical_concepts': 0
+        }
         
         # Initialize with system prompt
         self.add_message("system", SYSTEM_PROMPT)
@@ -112,11 +160,40 @@ class InterviewSession:
     
     def extract_candidate_info(self, response):
         """Extract candidate information from their responses"""
-        # Simple extraction - you can make this more sophisticated
-        if "applied for" in response.lower() or "role" in response.lower():
+        response_lower = response.lower()
+        
+        # Extract role information
+        if "applied for" in response_lower or "role" in response_lower:
             self.candidate_info['applied_role'] = response
-        if "introduction" in response.lower() or "name" in response.lower() or "experience" in response.lower():
+        
+        # Extract introduction and experience
+        if "introduction" in response_lower or "name" in response_lower or "experience" in response_lower:
             self.candidate_info['introduction'] = response
+            
+            # Extract experience level
+            experience_indicators = {
+                'junior': ['junior', 'entry level', 'fresh graduate', '0-2 years', 'starting my career'],
+                'mid-level': ['mid level', 'intermediate', '2-5 years', '3-5 years', 'few years of experience'],
+                'senior': ['senior', 'lead', '5+ years', 'extensive experience', 'many years']
+            }
+            
+            for level, indicators in experience_indicators.items():
+                if any(indicator in response_lower for indicator in indicators):
+                    self.candidate_info['experience_level'] = level
+                    break
+        
+        # Extract technical skills
+        tech_skills = [
+            'python', 'java', 'javascript', 'typescript', 'react', 'node', 'angular', 'vue',
+            'aws', 'azure', 'docker', 'kubernetes', 'sql', 'nosql', 'mongodb', 'redis',
+            'rest', 'graphql', 'ci/cd', 'git', 'agile', 'scrum', 'machine learning',
+            'data structures', 'algorithms', 'system design', 'microservices'
+        ]
+        
+        found_skills = [skill for skill in tech_skills if skill in response_lower]
+        if found_skills:
+            self.candidate_info['skills_mentioned'].extend(found_skills)
+            self.candidate_info['skills_mentioned'] = list(set(self.candidate_info['skills_mentioned']))
     
     def add_qa_pair(self, question, answer):
         """Store question-answer pair for feedback"""
@@ -128,6 +205,80 @@ class InterviewSession:
 
 # Store active interview sessions
 interview_sessions = {}
+
+# ========== ASSEMBLYAI EVENT HANDLERS ==========
+
+def on_begin(self: Type[StreamingClient], event: BeginEvent):
+    print(f"Session started: {event.id}")
+
+def on_turn(self: Type[StreamingClient], event: TurnEvent):
+    global transcribed_text, transcription_complete, last_audio_time
+    
+    # Update last audio time whenever we get any transcript
+    last_audio_time = time.time()
+    
+    # Skip empty transcripts
+    if event.transcript.strip():
+        print(f"Transcribed: {event.transcript} ({event.end_of_turn})")
+        transcribed_text = event.transcript
+
+    if event.end_of_turn and not event.turn_is_formatted:
+        params = StreamingSessionParameters(
+            format_turns=True,
+        )
+        self.set_params(params)
+    
+    # Mark transcription as complete when we have a full turn
+    if event.end_of_turn and event.transcript.strip():
+        transcription_complete = True
+
+def on_terminated(self: Type[StreamingClient], event: TerminationEvent):
+    print(f"Session terminated: {event.audio_duration_seconds} seconds of audio processed")
+
+def on_error(self: Type[StreamingClient], error: StreamingError):
+    print(f"Error occurred: {error}")
+
+class ControlledMicrophoneStream:
+    """Wrapper for MicrophoneStream with start/stop control"""
+    def __init__(self, sample_rate=16000):
+        self.sample_rate = sample_rate
+        self.mic_stream = None
+        
+    def __iter__(self):
+        self.mic_stream = aai.extras.MicrophoneStream(sample_rate=self.sample_rate)
+        return self
+    
+    def __next__(self):
+        global is_streaming, last_audio_time
+        
+        # Check if we should stop
+        if stop_event.is_set():
+            if self.mic_stream:
+                try:
+                    self.mic_stream.close()
+                except:
+                    pass
+            raise StopIteration
+        
+        with stream_lock:
+            if not is_streaming:
+                if self.mic_stream:
+                    try:
+                        self.mic_stream.close()
+                    except:
+                        pass
+                raise StopIteration
+        
+        # Get next audio chunk
+        try:
+            # Update last audio time when we get audio data
+            chunk = next(self.mic_stream)
+            last_audio_time = time.time()
+            return chunk
+        except StopIteration:
+            raise
+
+# ========== UTILITY FUNCTIONS ==========
 
 def find_working_model():
     """Find a working Gemini model from the available list"""
@@ -179,7 +330,7 @@ def generate_overall_feedback(conversation_history, candidate_info, qa_pairs):
         qa_summary = "\n".join([f"Q: {qa['question']}\nA: {qa['answer']}\n" for qa in qa_pairs])
         
         feedback_prompt = f"""
-Based on the following technical interview conversation, provide brief overall feedback for the candidate.
+As an expert technical interviewer, analyze the following interview and provide comprehensive feedback. Be objective and balanced in your assessment.
 
 Candidate Information:
 {json.dumps(candidate_info, indent=2)}
@@ -187,14 +338,31 @@ Candidate Information:
 Interview Conversation Summary:
 {qa_summary}
 
-Please provide brief structured feedback covering:
-1. Technical Knowledge & Skills
-2. Problem-Solving Approach
-3. Communication Skills
-4. Key Strengths
-5. Areas for Improvement
+Please provide structured feedback in the following format:
 
-Make the feedback constructive and professional but VERY CONCISE (maximum 100 words).
+1. Technical Proficiency (Score /100):
+- Knowledge of core concepts
+- Problem-solving capability
+- Code/system design understanding
+
+2. Communication & Soft Skills (Score /100):
+- Clarity of explanations
+- Question understanding
+- Professional interaction
+
+3. Overall Assessment:
+- Top 3 Strengths
+- Top 3 Areas for Improvement
+- Final Recommendation
+
+Remember:
+- Be specific with examples from their answers
+- Balance constructive criticism with positive feedback
+- Focus on actionable improvements
+- Keep the feedback professional and objective
+- Overall length should not exceed 200 words
+
+Format the response as a clear, well-structured assessment that would be valuable for both the candidate and hiring team.
 """
 
         response = model.generate_content(feedback_prompt)
@@ -272,10 +440,143 @@ Current conversation flow:
 
 def should_end_interview(user_input):
     """Check if user wants to end the interview"""
-    stop_keywords = ['stop', 'no more', 'thank you that\'s it']
-    return any(keyword in user_input.lower() for keyword in stop_keywords)
+    end_phrases = [
+        "end interview",
+        "stop interview",
+        "finish interview",
+        "conclude interview",
+        "that's all",
+        "i'm done",
+        "let's end",
+        "let's stop",
+        "can we stop",
+        "can we end",
+        "wrap up",
+        "finish up",
+        "no more",
+        "thank you that's it",
+        "we can stop here",
+        "end the session"
+    ]
+    user_input_lower = user_input.lower()
+    return any(phrase in user_input_lower for phrase in end_phrases)
 
-# ========== SPEECH ROUTES ==========
+# ========== ASSEMBLYAI SPEECH FUNCTIONS ==========
+
+def monitor_silence_timeout(timeout_seconds=5):
+    """Monitor for silence timeout and stop STT if no audio detected"""
+    global is_streaming, last_audio_time
+    
+    start_time = time.time()
+    last_audio_time = start_time
+    
+    while is_streaming and not stop_event.is_set():
+        current_time = time.time()
+        silence_duration = current_time - last_audio_time
+        
+        # Check if we've exceeded the silence timeout
+        if silence_duration >= timeout_seconds:
+            print(f"🕒 No speech detected for {timeout_seconds} seconds. Auto-stopping STT.")
+            stop_speech_recognition_internal()
+            break
+        
+        # Check if total session time exceeds a reasonable limit (30 seconds)
+        total_duration = current_time - start_time
+        if total_duration >= 30:  # Maximum 30 seconds per STT session
+            print("🕒 Maximum STT session time reached (30 seconds). Auto-stopping.")
+            stop_speech_recognition_internal()
+            break
+        
+        time.sleep(0.1)  # Check every 100ms
+
+def stop_speech_recognition_internal():
+    """Internal function to stop speech recognition"""
+    global is_streaming, stop_event, client_instance
+    
+    print("🛑 Auto-stopping speech recognition...")
+    
+    with stream_lock:
+        is_streaming = False
+    
+    stop_event.set()
+    
+    # Force disconnect immediately
+    if client_instance:
+        try:
+            client_instance.disconnect(terminate=True)
+        except:
+            pass
+
+def start_speech_recognition():
+    """Start AssemblyAI speech recognition and return transcribed text"""
+    global is_streaming, stop_event, client_instance, transcribed_text, transcription_complete, last_audio_time
+    
+    # Reset variables
+    transcribed_text = ""
+    transcription_complete = False
+    stop_event.clear()
+    last_audio_time = time.time()
+    
+    with stream_lock:
+        is_streaming = True
+    
+    print("\n[Starting AssemblyAI speech recognition...]")
+    print("⏰ STT will auto-stop after 5 seconds of silence")
+    
+    # Start silence monitoring in a separate thread
+    timeout_monitor_thread = threading.Thread(target=monitor_silence_timeout, args=(5,), daemon=True)
+    timeout_monitor_thread.start()
+    
+    client = StreamingClient(
+        StreamingClientOptions(
+            api_key=ASSEMBLYAI_API_KEY,
+            api_host="streaming.assemblyai.com",
+        )
+    )
+    
+    client_instance = client
+
+    client.on(StreamingEvents.Begin, on_begin)
+    client.on(StreamingEvents.Turn, on_turn)
+    client.on(StreamingEvents.Termination, on_terminated)
+    client.on(StreamingEvents.Error, on_error)
+
+    client.connect(
+        StreamingParameters(
+            sample_rate=16000,
+            format_turns=True
+        )
+    )
+
+    try:
+        # Use the controlled microphone stream
+        controlled_stream = ControlledMicrophoneStream(sample_rate=16000)
+        client.stream(controlled_stream)
+            
+    except Exception as e:
+        if not stop_event.is_set():  # Only print error if not intentionally stopped
+            print(f"\n[Error during streaming: {e}]")
+    finally:
+        # Small delay to ensure everything is processed
+        time.sleep(0.1)
+        
+        try:
+            if not stop_event.is_set():
+                client.disconnect(terminate=True)
+        except:
+            pass
+        
+        print("\n[Speech recognition session ended]")
+    
+    # Reset flags
+    with stream_lock:
+        is_streaming = False
+    stop_event.clear()
+    client_instance = None
+    
+    return transcribed_text
+
+# ========== FLASK ROUTES ==========
 
 @app.route("/tts", methods=["POST"])
 def tts():
@@ -299,28 +600,52 @@ def tts():
 
     return jsonify({"status": "ok", "text": text, "speaker": speaker})
 
-
 @app.route("/stt", methods=["GET"])
 def stt():
-    with sr.Microphone() as source:
-        print("🎤 Speak something...")
-        audio = recognizer.listen(source)
-
+    """Speech-to-text using AssemblyAI streaming with auto-stop on silence"""
     try:
-        text = recognizer.recognize_google(audio)
-        print("✅ You said:", text)
-        return jsonify({"status": "ok", "transcription": text})
-    except sr.UnknownValueError:
-        return jsonify({"status": "error", "message": "Could not understand audio"})
-    except sr.RequestError as e:
-        return jsonify({"status": "error", "message": f"API Error: {e}"})
+        print("🎤 Starting speech recognition... (Speak now)")
+        print("⏰ Will auto-stop after 5 seconds of silence")
+        
+        transcribed_text = start_speech_recognition()
+        
+        if transcribed_text:
+            print(f"✅ Transcribed: {transcribed_text}")
+            return jsonify({"status": "ok", "transcription": transcribed_text})
+        else:
+            return jsonify({"status": "error", "message": "No speech detected"})
+            
+    except Exception as e:
+        print(f"STT Error: {str(e)}")
+        return jsonify({"status": "error", "message": f"Speech recognition error: {str(e)}"})
 
-# ========== INTERVIEW ROUTES ==========
+@app.route("/stt/stop", methods=["POST"])
+def stop_stt():
+    """Stop ongoing speech recognition"""
+    global is_streaming, stop_event, client_instance
+    
+    print("🛑 Stopping speech recognition...")
+    
+    with stream_lock:
+        is_streaming = False
+    
+    stop_event.set()
+    
+    # Force disconnect immediately
+    if client_instance:
+        try:
+            client_instance.disconnect(terminate=True)
+        except:
+            pass
+    
+    return jsonify({"status": "ok", "message": "Speech recognition stopped"})
 
 @app.route('/api/start-interview', methods=['POST'])
 def start_interview():
     """Start a new interview session"""
     try:
+        print("🚀 Starting new interview session...")
+        
         session_id = str(uuid.uuid4())
         interview_session = InterviewSession(session_id)
         interview_sessions[session_id] = interview_session
@@ -329,6 +654,9 @@ def start_interview():
         initial_response = generate_ai_response(interview_session.conversation_history)
         interview_session.add_message("assistant", initial_response)
         interview_session.question_count += 1
+        
+        print(f"✅ Interview session started: {session_id}")
+        print(f"📝 First question: {initial_response}")
         
         return jsonify({
             'session_id': session_id,
@@ -339,7 +667,8 @@ def start_interview():
         })
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Error starting interview: {str(e)}")
+        return jsonify({'error': f'Failed to start interview: {str(e)}'}), 500
 
 @app.route('/api/respond', methods=['POST'])
 def respond_to_question():
@@ -348,6 +677,8 @@ def respond_to_question():
         data = request.json
         session_id = data.get('session_id')
         candidate_response = data.get('response', '').strip()
+        
+        print(f"📨 Received response for session {session_id}: {candidate_response[:50]}...")
         
         if not session_id or session_id not in interview_sessions:
             return jsonify({'error': 'Invalid session ID'}), 400
@@ -363,6 +694,7 @@ def respond_to_question():
         
         # Check if user wants to end the interview
         if should_end_interview(candidate_response):
+            print(f"🏁 Ending interview session: {session_id}")
             interview_session.is_completed = True
             
             # Store the last question-answer pair if available
@@ -409,6 +741,8 @@ def respond_to_question():
         interview_session.add_message("assistant", ai_response)
         interview_session.question_count += 1
         
+        print(f"🤖 Next question: {ai_response}")
+        
         return jsonify({
             'session_id': session_id,
             'message': ai_response,
@@ -419,7 +753,8 @@ def respond_to_question():
         })
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Error processing response: {str(e)}")
+        return jsonify({'error': f'Failed to process response: {str(e)}'}), 500
 
 @app.route('/api/end-interview/<session_id>', methods=['POST'])
 def end_interview(session_id):
@@ -503,6 +838,7 @@ def home():
         "routes": {
             "POST /tts": "Convert text to speech",
             "GET /stt": "Convert microphone speech to text",
+            "POST /stt/stop": "Stop ongoing speech recognition",
             "POST /api/start-interview": "Start a new interview session",
             "POST /api/respond": "Respond to interview question",
             "GET /api/interview-status/<session_id>": "Get interview status",
@@ -517,11 +853,14 @@ def home():
 if __name__ == "__main__":
     port = 5000
     print(f"🚀 Combined Speech and Interview Server running at http://127.0.0.1:{port}")
-    print(f"🎯 Using Gemini model: {WORKING_MODEL}")
+    print(f"🎯 Using Gemini model: ")
+    print(f"🎤 Using AssemblyAI for speech recognition")
+    print("⏰ STT Auto-stop: 5 seconds of silence")
     print("📝 Available endpoints:")
     print("   GET  /")
     print("   POST /tts")
     print("   GET  /stt")
+    print("   POST /stt/stop")
     print("   POST /api/start-interview")
     print("   POST /api/respond")
     print("   GET  /api/interview-status/<session_id>")
@@ -530,7 +869,8 @@ if __name__ == "__main__":
     print("   GET  /api/models")
     print("\n✨ Features:")
     print("   - Text-to-Speech (TTS) with Silero")
-    print("   - Speech-to-Text (STT) with Google Speech Recognition")
+    print("   - Speech-to-Text (STT) with AssemblyAI Streaming")
+    print("   - Auto-stop after 5 seconds of silence")
     print("   - AI-powered interview sessions with Gemini")
     print("   - No question limit - interview continues until you stop")
     print("   - Automatic brief feedback at the end")

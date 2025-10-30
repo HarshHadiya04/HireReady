@@ -249,6 +249,7 @@
     }
   }
 
+
   .section-feedback {
     @apply flex flex-col gap-8 max-w-5xl mx-auto max-sm:px-4 text-lg leading-7;
 
@@ -273,6 +274,7 @@
     @apply flex flex-wrap gap-4 max-lg:flex-col w-full items-stretch;
   }
 
+  
   .interview-text {
     @apply text-lg text-center text-white;
   }
