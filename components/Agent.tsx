@@ -26,6 +26,10 @@ const Agent = ({
   feedbackId,
   type,
   questions,
+  role,
+  level,
+  techstack,
+  interviewType,
 }: AgentProps) => {
   const router = useRouter();
   const [callStatus, setCallStatus] = useState<CallStatus>(CallStatus.INACTIVE);
@@ -124,8 +128,19 @@ const Agent = ({
         }
       }
 
-      // Start interview session
-      const startData = await postJson(`${baseUrl}/api/start-interview`);
+      // Prepare interview data to send to backend
+      const interviewData: any = {};
+      if (role) interviewData.role = role;
+      if (level) interviewData.level = level;
+      if (techstack) interviewData.techstack = techstack;
+      if (interviewType) interviewData.type = interviewType;
+      if (questions) interviewData.questions = questions;
+
+      // Start interview session with interview data
+      const startData = await postJson(
+        `${baseUrl}/api/start-interview`,
+        Object.keys(interviewData).length > 0 ? interviewData : undefined
+      );
       const sessionId: string = startData.session_id;
       const firstMessage: string = startData.message;
 

@@ -122,17 +122,26 @@ last_audio_time = 0
 # ========== INTERVIEW SESSION CLASS ==========
 
 class InterviewSession:
-    def __init__(self, session_id):
+    def __init__(self, session_id, interview_data=None):
         self.session_id = session_id
         self.conversation_history = []
         self.question_count = 0
         self.start_time = datetime.now()
         self.is_completed = False
+        
+        # Store interview metadata from form
+        self.interview_data = interview_data or {}
+        self.role = self.interview_data.get('role', 'Software Engineer')
+        self.level = self.interview_data.get('level', 'intermediate')
+        self.techstack = self.interview_data.get('techstack', [])
+        self.interview_type = self.interview_data.get('type', 'Technical')
+        self.questions = self.interview_data.get('questions', [])
+        
         self.candidate_info = {
-            'applied_role': '',
+            'applied_role': self.role,  # Pre-fill with form data
             'introduction': '',
-            'skills_mentioned': [],
-            'experience_level': '',
+            'skills_mentioned': list(self.techstack) if isinstance(self.techstack, list) else [],
+            'experience_level': self.level,
             'communication_score': 0,
             'technical_score': 0,
             'key_strengths': [],
@@ -148,8 +157,97 @@ class InterviewSession:
             'technical_concepts': 0
         }
         
-        # Initialize with system prompt
-        self.add_message("system", SYSTEM_PROMPT)
+        # Generate system prompt with interview data
+        system_prompt = self._generate_system_prompt()
+        self.add_message("system", system_prompt)
+    
+    def _generate_system_prompt(self):
+        """Generate system prompt based on interview metadata"""
+        techstack_str = ", ".join(self.techstack) if isinstance(self.techstack, list) else str(self.techstack)
+        
+        # Build questions context - CRITICAL for question scope
+        questions_context = ""
+        if self.questions and len(self.questions) > 0:
+            questions_list = "\n".join([f"{i+1}. {q}" for i, q in enumerate(self.questions)])
+            questions_context = f"""
+
+═══════════════════════════════════════════════════════════════
+PREPARED QUESTIONS FOR THIS INTERVIEW (MANDATORY SCOPE):
+═══════════════════════════════════════════════════════════════
+You have {len(self.questions)} prepared questions. You MUST ask questions ONLY from this list or variations/clarifications based on these questions.
+
+{questions_list}
+
+CRITICAL: All your questions MUST be directly related to these {len(self.questions)} prepared questions. You can:
+- Ask these questions in natural conversation flow
+- Adapt them based on candidate's previous answers
+- Ask follow-up questions related to these topics
+- BUT NEVER ask questions outside this scope or unrelated topics
+═══════════════════════════════════════════════════════════════
+"""
+        else:
+            questions_context = f"""
+
+═══════════════════════════════════════════════════════════════
+QUESTION SCOPE - NO PREPARED QUESTIONS PROVIDED
+═══════════════════════════════════════════════════════════════
+Since no specific questions were provided, you must generate questions STRICTLY based on:
+- Position: {self.role}
+- Level: {self.level}
+- Technologies: {techstack_str}
+- Type: {self.interview_type}
+
+ALL questions MUST be relevant to these specific criteria above.
+═══════════════════════════════════════════════════════════════
+"""
+        
+        return f"""
+You are an expert technical interviewer conducting an interview for a {self.role} position at {self.level} level. 
+
+═══════════════════════════════════════════════════════════════
+INTERVIEW CARD DETAILS (MANDATORY SCOPE - DO NOT DEVIATE):
+═══════════════════════════════════════════════════════════════
+- Position/Role: {self.role}
+- Experience Level: {self.level}
+- Required Technologies: {techstack_str}
+- Interview Type: {self.interview_type}
+{questions_context}
+
+CRITICAL QUESTION SCOPE RULES:
+1. ALL questions MUST be based ONLY on the interview card details above
+2. Questions MUST relate to: {self.role} position, {self.level} level concepts, {techstack_str} technologies
+3. Interview type focus: {self.interview_type} questions
+4. DO NOT ask questions outside this scope
+5. DO NOT ask about unrelated technologies, roles, or topics
+6. Every question must align with at least one of: role, level, technology, or prepared questions
+═══════════════════════════════════════════════════════════════
+
+INTERVIEW FLOW GUIDELINES:
+1. START with asking the candidate to introduce themselves (name, background, experience)
+2. DO NOT ask about the role, level, or technologies - these are already known from the form
+3. After introduction, proceed directly to ask questions STRICTLY from the interview card scope above
+4. There is NO fixed number of questions - continue until the candidate asks to stop
+5. Each question should build upon the previous responses - make it conversational and contextual
+6. Ask one question at a time and wait for their response
+7. Provide brief, constructive feedback after each answer (1-2 sentences only)
+8. Questions should be {self.level} level and CONCISE
+9. Make the interview flow naturally like a real conversation
+10. When the candidate says they want to stop or end the interview, provide brief overall feedback
+11. KEEP QUESTIONS AND FEEDBACK BRIEF AND TO THE POINT - maximum 2 sentences each
+12. Avoid long explanations and detailed examples
+
+ANTI-REPETITION RULES (CRITICAL):
+- NEVER repeat or echo back the candidate's response
+- NEVER repeat your previous question
+- NEVER summarize what they said unless absolutely necessary for context
+- Simply acknowledge briefly (1 sentence) and move to the next question
+- Your responses should ONLY contain: brief feedback + new question (2-3 sentences total)
+- Do NOT say things like "You mentioned..." or "Based on your answer about..." - just respond naturally
+
+Remember: The candidate has already scheduled this interview with these specific requirements. 
+ALL questions must be within the scope of: {self.role} role, {self.level} level, {techstack_str} technologies, and {self.interview_type} focus.
+DO NOT deviate from this scope.
+"""
         
     def add_message(self, role, content):
         self.conversation_history.append({
@@ -372,57 +470,113 @@ Format the response as a clear, well-structured assessment that would be valuabl
         print(f"Feedback generation error: {e}")
         return "Thank you for completing the interview. Your responses have been recorded and will be reviewed by our team."
 
-def generate_ai_response(conversation_history, is_final_feedback=False):
+def generate_ai_response(conversation_history, is_final_feedback=False, interview_session=None):
     """Generate response using Gemini API with contextual awareness"""
     try:
         # Create model with working model name
         model = genai.GenerativeModel(WORKING_MODEL)
         
-        # Prepare conversation context
-        context_messages = []
-        for msg in conversation_history:
-            if msg['role'] == 'system':
-                context_messages.append(f"System Instructions: {msg['content']}")
-            elif msg['role'] == 'user':
-                context_messages.append(f"Candidate: {msg['content']}")
-            elif msg['role'] == 'assistant':
-                context_messages.append(f"Interviewer: {msg['content']}")
+        # Extract conversation context without full repetition
+        # Get key topics mentioned but not full responses
+        topic_summary = ""
+        last_user_msg = None
         
-        context = "\n".join(context_messages)
+        # Find last user message (candidate's response)
+        for msg in reversed(conversation_history):
+            if msg['role'] == 'user':
+                last_user_msg = msg['content']
+                break
+        
+        # Build topic summary from conversation (without full text)
+        topics_mentioned = []
+        for msg in conversation_history:
+            if msg['role'] == 'user' and msg['content']:
+                # Extract key topics/technologies mentioned (simple approach)
+                content_lower = msg['content'].lower()
+                if any(word in content_lower for word in ['react', 'node', 'python', 'javascript', 'java', 'sql', 'database']):
+                    topics_mentioned.append("technical experience")
+                if 'experience' in content_lower or 'worked' in content_lower:
+                    topics_mentioned.append("work experience")
+        
+        topic_summary = ", ".join(set(topics_mentioned[:3])) if topics_mentioned else "general background"
         
         if is_final_feedback:
             # Generate farewell message when interview ends
-            prompt = f"""
-The candidate has decided to end the interview. Please provide a brief polite closing message thanking them for their time.
-
-Previous conversation:
-{context}
-
-Interviewer:"""
+            prompt = "The candidate has decided to end the interview. Please provide a brief polite closing message thanking them for their time. Keep it to one sentence. Do NOT repeat any previous conversation."
+            response = model.generate_content(prompt)
         else:
-            # Enhanced prompt for contextual questioning
-            prompt = f"""
-You are conducting a technical interview. Here's the conversation so far:
+            # Build enhanced prompt with role context and question scope
+            role_context = ""
+            question_scope = ""
+            
+            if interview_session:
+                techstack_str = ", ".join(interview_session.techstack) if isinstance(interview_session.techstack, list) else str(interview_session.techstack)
+                role_context = f"\n\nINTERVIEW CARD SCOPE (MANDATORY):\n- Role: {interview_session.role}\n- Level: {interview_session.level}\n- Technologies: {techstack_str}\n- Type: {interview_session.interview_type}"
+                
+                # Add question scope reminder
+                if interview_session.questions and len(interview_session.questions) > 0:
+                    question_scope = f"\n\nQUESTION SCOPE: You have {len(interview_session.questions)} prepared questions. Your next question MUST be:\n- From the prepared questions list, OR\n- A follow-up/clarification related to those questions, OR\n- Related to {interview_session.role} role, {interview_session.level} level, and {techstack_str} technologies\n\nDO NOT ask questions outside this scope!"
+                else:
+                    question_scope = f"\n\nQUESTION SCOPE: Your next question MUST be related to:\n- {interview_session.role} position\n- {interview_session.level} level concepts\n- {techstack_str} technologies\n- {interview_session.interview_type} interview focus\n\nDO NOT ask questions outside this scope!"
+            
+            # Build prompt that provides context but prevents repetition
+            if last_user_msg:
+                # Check if this is the first response after introduction/confirmation
+                # Count how many exchanges have happened
+                user_responses = [msg for msg in conversation_history if msg['role'] == 'user']
+                is_after_confirmation = len(user_responses) == 1
+                
+                if is_after_confirmation:
+                    # This is after introduction and confirmation - acknowledge and start technical questions
+                    prompt = f"""You are conducting a technical interview. The candidate has just introduced themselves and confirmed the interview details (role, level, tech stack, number of questions).
 
-{context}
+{role_context}{question_scope}
 
-IMPORTANT INSTRUCTIONS:
-1. Analyze the candidate's previous responses to ask relevant follow-up questions
-2. If this is the beginning, ask for introduction and applied role
-3. Build upon their technical skills, experience, and previous answers
-4. Ask only ONE question at a time
-5. Provide brief, constructive feedback on their previous answer before asking the next question (1-2 sentences only)
-6. Make it conversational and natural
-7. Continue until the candidate asks to stop/end the interview
-8. KEEP ALL QUESTIONS AND FEEDBACK CONCISE - maximum 2 sentences each
-9. Avoid long explanations and detailed examples
+IMPORTANT: They have confirmed the interview details. Now start asking TECHNICAL questions based on the interview card scope above.
 
-Current conversation flow:
-"""
+Your response should:
+1. Briefly acknowledge their introduction and confirmation (1 sentence)
+2. Ask your FIRST technical question based on the interview card scope
+3. Maximum 2-3 sentences total
+4. Question MUST be within the scope: {interview_session.role if interview_session else 'role'}, {interview_session.level if interview_session else 'level'}, and technologies listed above
 
-        response = model.generate_content(prompt)
+Start with your first technical question now:"""
+                else:
+                    # Regular follow-up question
+                    prompt = f"""You are conducting a technical interview. The candidate just responded to your question.
+
+{role_context}{question_scope}
+
+CRITICAL ANTI-REPETITION RULES:
+1. NEVER repeat what the candidate just said - assume you already know their answer
+2. NEVER echo back phrases like "you mentioned..." or "based on your answer..."
+3. NEVER repeat your previous question
+4. Simply acknowledge briefly (1 short sentence) and ask the NEXT new question
+5. Maximum 2-3 sentences total: brief acknowledgment + new question
+6. Keep it natural and forward-moving
+7. REMEMBER: Next question MUST be within the interview card scope above
+
+GOOD example: "Good point. What's your approach to testing this?"
+BAD example: "Based on your answer about React hooks, you mentioned useState. Tell me about React hooks..." (DON'T DO THIS)
+
+Now respond with brief acknowledgment and next question (must be within scope):"""
+            else:
+                # This shouldn't happen, but fallback
+                prompt = f"""You are conducting a technical interview. The candidate has just introduced themselves.
+
+{role_context}{question_scope}
+
+Ask your first technical question. The question MUST be:
+- Within the interview card scope listed above
+- Related to {interview_session.role if interview_session else 'the position'} role
+- Appropriate for {interview_session.level if interview_session else 'the'} level
+- Keep it to 1-2 sentences
+- Do NOT repeat what they said in their introduction
+- Do NOT ask questions outside the scope"""
+
+            response = model.generate_content(prompt)
         
-        if response.text:
+        if response and response.text:
             return response.text.strip()
         else:
             return "Thank you for that response. Let me ask you another question based on what you've shared."
@@ -646,12 +800,24 @@ def start_interview():
     try:
         print("🚀 Starting new interview session...")
         
+        # Get interview data from request (if provided)
+        data = request.get_json() or {}
+        interview_data = {
+            'role': data.get('role', 'Software Engineer'),
+            'level': data.get('level', 'intermediate'),
+            'techstack': data.get('techstack', []),
+            'type': data.get('type', 'Technical'),
+            'questions': data.get('questions', [])
+        }
+        
+        print(f"📋 Interview data: Role={interview_data['role']}, Level={interview_data['level']}, Tech={interview_data['techstack']}")
+        
         session_id = str(uuid.uuid4())
-        interview_session = InterviewSession(session_id)
+        interview_session = InterviewSession(session_id, interview_data)
         interview_sessions[session_id] = interview_session
         
-        # Generate initial greeting and first question (introduction)
-        initial_response = generate_ai_response(interview_session.conversation_history)
+        # Generate initial greeting asking for introduction
+        initial_response = generate_initial_greeting(interview_session)
         interview_session.add_message("assistant", initial_response)
         interview_session.question_count += 1
         
@@ -669,6 +835,36 @@ def start_interview():
     except Exception as e:
         print(f"❌ Error starting interview: {str(e)}")
         return jsonify({'error': f'Failed to start interview: {str(e)}'}), 500
+
+def generate_initial_greeting(interview_session):
+    """Generate initial greeting asking for introduction and confirmation of interview details"""
+    try:
+        role = interview_session.role
+        level = interview_session.level
+        techstack_str = ", ".join(interview_session.techstack) if isinstance(interview_session.techstack, list) else str(interview_session.techstack)
+        interview_type = interview_session.interview_type
+        num_questions = len(interview_session.questions) if interview_session.questions else 0
+        
+        # Generate greeting asking for introduction AND confirmation
+        greeting = f"""Hello! Welcome to your interview. To get started, could you please:
+1. Introduce yourself - tell me your name, your background, and any relevant experience
+2. Confirm the interview details: the role ({role}), difficulty level ({level}), tech stack ({techstack_str}), and number of questions ({num_questions} questions)
+
+Please share your introduction and confirm these details."""
+        
+        return greeting
+    
+    except Exception as e:
+        print(f"Error generating initial greeting: {str(e)}")
+        role = interview_session.role
+        level = interview_session.level
+        techstack_str = ", ".join(interview_session.techstack) if isinstance(interview_session.techstack, list) else str(interview_session.techstack)
+        num_questions = len(interview_session.questions) if interview_session.questions else 0
+        return f"""Hello! Welcome to your interview. To get started, could you please:
+1. Introduce yourself - tell me your name, your background, and any relevant experience
+2. Confirm the interview details: the role ({role}), difficulty level ({level}), tech stack ({techstack_str}), and number of questions ({num_questions} questions)
+
+Please share your introduction and confirm these details."""
 
 @app.route('/api/respond', methods=['POST'])
 def respond_to_question():
@@ -710,7 +906,7 @@ def respond_to_question():
             )
             
             # Add final message
-            farewell_message = generate_ai_response(interview_session.conversation_history, is_final_feedback=True)
+            farewell_message = generate_ai_response(interview_session.conversation_history, is_final_feedback=True, interview_session=interview_session)
             interview_session.add_message("assistant", farewell_message)
             
             return jsonify({
@@ -737,7 +933,7 @@ def respond_to_question():
         interview_session.add_message("user", candidate_response)
         
         # Generate next question with contextual awareness
-        ai_response = generate_ai_response(interview_session.conversation_history)
+        ai_response = generate_ai_response(interview_session.conversation_history, interview_session=interview_session)
         interview_session.add_message("assistant", ai_response)
         interview_session.question_count += 1
         

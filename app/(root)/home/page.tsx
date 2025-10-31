@@ -58,6 +58,8 @@ async function Home() {
                 type={interview.type}
                 techstack={interview.techstack}
                 createdAt={interview.createdAt}
+                level={interview.level}
+                numberOfQuestions={interview.questions?.length}
               />
             ))
           ) : (
@@ -80,6 +82,8 @@ async function Home() {
                 type={interview.type}
                 techstack={interview.techstack}
                 createdAt={interview.createdAt}
+                level={interview.level}
+                numberOfQuestions={interview.questions?.length}
               />
             ))
           ) : (

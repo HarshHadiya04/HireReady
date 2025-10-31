@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       role: role,
       type: type,
       level: level,
-      techstack: techstack.split(","),
+      techstack: techstack.split(",").map((tech: string) => tech.trim()).filter((tech: string) => tech.length > 0),
       questions: JSON.parse(questions),
       userId: userid,
       finalized: true,
@@ -37,9 +37,9 @@ export async function POST(request: Request) {
       createdAt: new Date().toISOString(),
     };
 
-    await db.collection("interviews").add(interview);
+    const interviewRef = await db.collection("interviews").add(interview);
 
-    return Response.json({ success: true }, { status: 200 });
+    return Response.json({ success: true, interviewId: interviewRef.id }, { status: 200 });
   } catch (error) {
     console.error("Error:", error);
     return Response.json({ success: false, error: error }, { status: 500 });

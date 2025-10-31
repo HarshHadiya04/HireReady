@@ -15,6 +15,8 @@ const InterviewCard = async ({
   type,
   techstack,
   createdAt,
+  level,
+  numberOfQuestions,
 }: InterviewCardProps) => {
   const feedback =
     userId && interviewId
@@ -62,6 +64,16 @@ const InterviewCard = async ({
 
           {/* Interview Role */}
           <h3 className="mt-5 capitalize">{role} Interview</h3>
+
+          {/* Level & Questions Info */}
+          {(level || numberOfQuestions) && (
+            <div className="flex flex-row gap-4 mt-2 text-sm text-muted-foreground">
+              {level && <span className="capitalize">Level: {level}</span>}
+              {numberOfQuestions && (
+                <span>Questions: {numberOfQuestions}</span>
+              )}
+            </div>
+          )}
 
           {/* Date & Score */}
           <div className="flex flex-row gap-5 mt-3">

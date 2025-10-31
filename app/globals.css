@@ -250,6 +250,10 @@
   }
 
 
+  .feedback-container {
+    @apply fixed inset-0 z-50 bg-white dark:bg-dark-100 overflow-y-auto py-8;
+  }
+
   .section-feedback {
     @apply flex flex-col gap-8 max-w-5xl mx-auto max-sm:px-4 text-lg leading-7;
 
