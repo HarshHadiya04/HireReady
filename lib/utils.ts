@@ -13,6 +13,8 @@ const normalizeTechName = (tech: string) => {
   return mappings[key as keyof typeof mappings];
 };
 
+// fix dashboard
+
 const checkIconExists = async (url: string) => {
   try {
     const response = await fetch(url, { method: "HEAD" });

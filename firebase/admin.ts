@@ -3,6 +3,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
 // Initialize Firebase Admin SDK
+// connect with firebase
 function initFirebaseAdmin() {
   const apps = getApps();
 
