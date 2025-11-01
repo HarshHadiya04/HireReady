@@ -25,13 +25,14 @@
 
 ## ✨ Features
 
-* **Interview Practice** – Practice with commonly asked interview questions across different domains
-* **Resume Builder** – Create professional resumes with customizable templates
-* **Application Tracker** – Keep track of all your job applications in one place
-* **Mock Interviews** – Simulate real interview scenarios with AI-powered feedback
-* **Company Insights** – Get detailed information about companies and their interview processes
-* **Progress Analytics** – Track your preparation progress with detailed analytics
-* **Resource Library** – Access curated learning materials and preparation guides
+* 📝 Schedule interviews by specifying technology, role, difficulty level, and number of questions
+* 📊 Dashboard to view and manage all scheduled interviews
+* 🎯 Support for multiple technology tracks (JavaScript, Python, Java, React)
+* 🔄 Interview status tracking (Scheduled, In-Progress, Completed)
+* 🎨 Intuitive user interface with modal forms and card-based layout
+* ✅ Form validation and error handling
+* 🔍 Real-time interview status updates
+* 📱 Responsive design for various screen sizes
 
 ---
 
@@ -74,8 +75,7 @@ Before you begin, ensure you have the following installed:
 
 * Node.js (v14 or higher)
 * npm or yarn
-* MongoDB / PostgreSQL (depending on your database choice)
-
+* PostgreSQL 
 ---
 
 ### **Installation**
@@ -208,6 +208,6 @@ This project is licensed under the **MIT License** – see the [LICENSE](LICENSE
 
 * [React Documentation](https://react.dev/)
 * [Node.js Documentation](https://nodejs.org/en/docs)
-* [MongoDB Documentation](https://www.mongodb.com/docs/)
 * [Tailwind CSS](https://tailwindcss.com/)
 * [Lucide Icons](https://lucide.dev/)
+
