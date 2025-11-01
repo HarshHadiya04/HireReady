@@ -55,9 +55,9 @@
 
 ### **Backend**
 
-* Node.js
-* Express.js
-* MongoDB / PostgreSQL
+* Node.js, python
+* Flask
+* Firebase
 
 ### **Additional Tools**
 
@@ -87,21 +87,15 @@ git clone https://github.com/HarshHadiya04/HireReady.git
 cd HireReady
 ```
 
-**2. Install dependencies for the backend**
+**2. Install dependencies for the Project**
 
 ```bash
-cd backend
+cd hireready
 npm install
 ```
 
-**3. Install dependencies for the frontend**
 
-```bash
-cd ../frontend
-npm install
-```
-
-**4. Create environment variables**
+**3. Create environment variables**
 
 Create a `.env` file in the backend directory:
 
@@ -125,15 +119,15 @@ REACT_APP_API_URL=http://localhost:5000
 **Start the backend server**
 
 ```bash
-cd backend
-npm start
+cd hireready
+npm run dev
 ```
 
-**Start the frontend development server**
+**Start the flask server**
 
 ```bash
-cd frontend
-npm start
+cd try
+python app.py
 ```
 
 The application should now be running on:
@@ -151,33 +145,7 @@ The application should now be running on:
 
 ---
 
-## 📁 Project Structure
 
-```
-HireReady/
-├── frontend/
-│   ├── public/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── utils/
-│   │   ├── styles/
-│   │   └── App.js
-│   └── package.json
-├── backend/
-│   ├── config/
-│   ├── controllers/
-│   ├── models/
-│   ├── routes/
-│   ├── middleware/
-│   └── server.js
-├── screenshots/
-└── README.md
-```
-
----
-
-## 🤝 Contributing
 
 Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are greatly appreciated!
 
@@ -210,4 +178,5 @@ This project is licensed under the **MIT License** – see the [LICENSE](LICENSE
 * [Node.js Documentation](https://nodejs.org/en/docs)
 * [Tailwind CSS](https://tailwindcss.com/)
 * [Lucide Icons](https://lucide.dev/)
+
 
